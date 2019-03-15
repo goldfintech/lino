@@ -77,6 +77,10 @@ func main() {
 		)...)
 	linocliCmd.AddCommand(
 		client.PostCommands(
+			acccmd.UpdateTxCmd(cdc),
+		)...)
+	linocliCmd.AddCommand(
+		client.PostCommands(
 			acccmd.RecoverTxCmd(cdc),
 		)...)
 	linocliCmd.AddCommand(

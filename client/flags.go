@@ -20,6 +20,7 @@ const (
 	FlagFollower = "follower"
 	FlagSender   = "sender"
 	FlagReceiver = "receiver"
+	FlagJSONMeta = "jsonmeta"
 	FlagAmount   = "amount"
 	FlagMemo     = "memo"
 
