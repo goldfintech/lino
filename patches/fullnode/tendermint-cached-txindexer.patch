@@ -1,17 +1,28 @@
+diff --git a/CHANGELOG_PENDING.md b/CHANGELOG_PENDING.md
+index f211a27f..c43b4e25 100644
+--- a/CHANGELOG_PENDING.md
++++ b/CHANGELOG_PENDING.md
+@@ -19,3 +19,5 @@
+ ### IMPROVEMENTS:
+ 
+ ### BUG FIXES:
++- [libs/db] Fixed the BoltDB backend's Batch.Delete implementation (@Yawning)
++- [libs/db] Fixed the BoltDB backend's Get and Iterator implementation (@Yawning)
 diff --git a/consensus/replay.go b/consensus/replay.go
-index e47d4892..c249231a 100644
+index 794f870d..e6f6fd28 100644
 --- a/consensus/replay.go
 +++ b/consensus/replay.go
-@@ -16,6 +16,8 @@ import (
- 	cmn "github.com/tendermint/tendermint/libs/common"
+@@ -17,6 +17,9 @@ import (
  	dbm "github.com/tendermint/tendermint/libs/db"
  	"github.com/tendermint/tendermint/libs/log"
+ 	"github.com/tendermint/tendermint/mock"
 +	"github.com/tendermint/tendermint/state/txindex"
 +	nulltxindexer "github.com/tendermint/tendermint/state/txindex/null"
- 
++
  	"github.com/tendermint/tendermint/proxy"
  	sm "github.com/tendermint/tendermint/state"
-@@ -203,6 +205,9 @@ type Handshaker struct {
+ 	"github.com/tendermint/tendermint/types"
+@@ -203,6 +206,9 @@ type Handshaker struct {
  	genDoc       *types.GenesisDoc
  	logger       log.Logger
  
@@ -21,7 +32,7 @@ index e47d4892..c249231a 100644
  	nBlocks int // number of blocks applied to the state
  }
  
-@@ -216,6 +221,7 @@ func NewHandshaker(stateDB dbm.DB, state sm.State,
+@@ -216,6 +222,7 @@ func NewHandshaker(stateDB dbm.DB, state sm.State,
  		eventBus:     types.NopEventBus{},
  		genDoc:       genDoc,
  		logger:       log.NewNopLogger(),
@@ -29,7 +40,7 @@ index e47d4892..c249231a 100644
  		nBlocks:      0,
  	}
  }
-@@ -224,6 +230,11 @@ func (h *Handshaker) SetLogger(l log.Logger) {
+@@ -224,6 +231,11 @@ func (h *Handshaker) SetLogger(l log.Logger) {
  	h.logger = l
  }
  
@@ -41,8 +52,8 @@ index e47d4892..c249231a 100644
  // SetEventBus - sets the event bus for publishing block related events.
  // If not called, it defaults to types.NopEventBus.
  func (h *Handshaker) SetEventBus(eventBus types.BlockEventPublisher) {
-@@ -445,6 +456,9 @@ func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.Ap
- 	blockExec := sm.NewBlockExecutor(h.stateDB, h.logger, proxyApp, sm.MockMempool{}, sm.MockEvidencePool{})
+@@ -457,6 +469,9 @@ func (h *Handshaker) replayBlock(state sm.State, height int64, proxyApp proxy.Ap
+ 	blockExec := sm.NewBlockExecutor(h.stateDB, h.logger, proxyApp, mock.Mempool{}, sm.MockEvidencePool{})
  	blockExec.SetEventBus(h.eventBus)
  
 +	// XXX(yumin): setTxIndexer for cache is required as fullnodes hit this path.
@@ -51,11 +62,118 @@ index e47d4892..c249231a 100644
  	var err error
  	state, err = blockExec.ApplyBlock(state, meta.BlockID, block)
  	if err != nil {
+diff --git a/libs/db/boltdb.go b/libs/db/boltdb.go
+index 6bf474c8..30501dd8 100644
+--- a/libs/db/boltdb.go
++++ b/libs/db/boltdb.go
+@@ -66,7 +66,9 @@ func (bdb *BoltDB) Get(key []byte) (value []byte) {
+ 	key = nonEmptyKey(nonNilBytes(key))
+ 	err := bdb.db.View(func(tx *bbolt.Tx) error {
+ 		b := tx.Bucket(bucket)
+-		value = b.Get(key)
++		if v := b.Get(key); v != nil {
++			value = append([]byte{}, v...)
++		}
+ 		return nil
+ 	})
+ 	if err != nil {
+@@ -149,55 +151,45 @@ func (bdb *BoltDB) Stats() map[string]string {
+ // boltDBBatch stores key values in sync.Map and dumps them to the underlying
+ // DB upon Write call.
+ type boltDBBatch struct {
+-	buffer []struct {
+-		k []byte
+-		v []byte
+-	}
+-	db *BoltDB
++	db  *BoltDB
++	ops []operation
+ }
+ 
+ // NewBatch returns a new batch.
+ func (bdb *BoltDB) NewBatch() Batch {
+ 	return &boltDBBatch{
+-		buffer: make([]struct {
+-			k []byte
+-			v []byte
+-		}, 0),
+-		db: bdb,
++		ops: nil,
++		db:  bdb,
+ 	}
+ }
+ 
+ // It is safe to modify the contents of the argument after Set returns but not
+ // before.
+ func (bdb *boltDBBatch) Set(key, value []byte) {
+-	bdb.buffer = append(bdb.buffer, struct {
+-		k []byte
+-		v []byte
+-	}{
+-		key, value,
+-	})
++	bdb.ops = append(bdb.ops, operation{opTypeSet, key, value})
+ }
+ 
+ // It is safe to modify the contents of the argument after Delete returns but
+ // not before.
+ func (bdb *boltDBBatch) Delete(key []byte) {
+-	for i, elem := range bdb.buffer {
+-		if bytes.Equal(elem.k, key) {
+-			// delete without preserving order
+-			bdb.buffer[i] = bdb.buffer[len(bdb.buffer)-1]
+-			bdb.buffer = bdb.buffer[:len(bdb.buffer)-1]
+-			return
+-		}
+-	}
++	bdb.ops = append(bdb.ops, operation{opTypeDelete, key, nil})
+ }
+ 
+ // NOTE: the operation is synchronous (see BoltDB for reasons)
+ func (bdb *boltDBBatch) Write() {
+ 	err := bdb.db.db.Batch(func(tx *bbolt.Tx) error {
+ 		b := tx.Bucket(bucket)
+-		for _, elem := range bdb.buffer {
+-			if putErr := b.Put(elem.k, elem.v); putErr != nil {
+-				return putErr
++		for _, op := range bdb.ops {
++			key := nonEmptyKey(nonNilBytes(op.key))
++			switch op.opType {
++			case opTypeSet:
++				if putErr := b.Put(key, op.value); putErr != nil {
++					return putErr
++				}
++			case opTypeDelete:
++				if delErr := b.Delete(key); delErr != nil {
++					return delErr
++				}
+ 			}
+ 		}
+ 		return nil
+@@ -322,12 +314,16 @@ func (itr *boltDBIterator) Next() {
+ 
+ func (itr *boltDBIterator) Key() []byte {
+ 	itr.assertIsValid()
+-	return itr.currentKey
++	return append([]byte{}, itr.currentKey...)
+ }
+ 
+ func (itr *boltDBIterator) Value() []byte {
+ 	itr.assertIsValid()
+-	return itr.currentValue
++	var value []byte
++	if itr.currentValue != nil {
++		value = append([]byte{}, itr.currentValue...)
++	}
++	return value
+ }
+ 
+ func (itr *boltDBIterator) Close() {
 diff --git a/node/node.go b/node/node.go
-index c0a4d736..aaab98d2 100644
+index 0d05deee..0e88e076 100644
 --- a/node/node.go
 +++ b/node/node.go
-@@ -362,6 +362,9 @@ func NewNode(config *cfg.Config,
+@@ -564,6 +564,9 @@ func NewNode(config *cfg.Config,
  		sm.BlockExecutorWithMetrics(smMetrics),
  	)
  
@@ -66,19 +184,19 @@ index c0a4d736..aaab98d2 100644
  	bcReactor := bc.NewBlockchainReactor(state.Copy(), blockExec, blockStore, fastSync)
  	bcReactor.SetLogger(logger.With("module", "blockchain"))
 diff --git a/state/execution.go b/state/execution.go
-index 3a11ecca..e962b487 100644
+index 7e49a9ad..3baa45d3 100644
 --- a/state/execution.go
 +++ b/state/execution.go
-@@ -9,6 +9,8 @@ import (
- 	"github.com/tendermint/tendermint/libs/fail"
+@@ -10,6 +10,8 @@ import (
  	"github.com/tendermint/tendermint/libs/log"
+ 	mempl "github.com/tendermint/tendermint/mempool"
  	"github.com/tendermint/tendermint/proxy"
 +	"github.com/tendermint/tendermint/state/txindex"
 +	nulltxindexer "github.com/tendermint/tendermint/state/txindex/null"
  	"github.com/tendermint/tendermint/types"
  )
  
-@@ -25,6 +27,9 @@ type BlockExecutor struct {
+@@ -26,6 +28,9 @@ type BlockExecutor struct {
  	// execute the app against this
  	proxyApp proxy.AppConnConsensus
  
@@ -88,9 +206,9 @@ index 3a11ecca..e962b487 100644
  	// events
  	eventBus types.BlockEventPublisher
  
-@@ -50,13 +55,14 @@ func BlockExecutorWithMetrics(metrics *Metrics) BlockExecutorOption {
+@@ -51,13 +56,14 @@ func BlockExecutorWithMetrics(metrics *Metrics) BlockExecutorOption {
  // Call SetEventBus to provide one.
- func NewBlockExecutor(db dbm.DB, logger log.Logger, proxyApp proxy.AppConnConsensus, mempool Mempool, evpool EvidencePool, options ...BlockExecutorOption) *BlockExecutor {
+ func NewBlockExecutor(db dbm.DB, logger log.Logger, proxyApp proxy.AppConnConsensus, mempool mempl.Mempool, evpool EvidencePool, options ...BlockExecutorOption) *BlockExecutor {
  	res := &BlockExecutor{
 -		db:       db,
 -		proxyApp: proxyApp,
@@ -110,8 +228,8 @@ index 3a11ecca..e962b487 100644
  	}
  
  	for _, option := range options {
-@@ -66,6 +72,11 @@ func NewBlockExecutor(db dbm.DB, logger log.Logger, proxyApp proxy.AppConnConsen
- 	return res
+@@ -71,6 +77,11 @@ func (blockExec *BlockExecutor) DB() dbm.DB {
+ 	return blockExec.db
  }
  
 +// SetTxIndexer - sets tx indexer, if not called, nulltxinders.
@@ -122,7 +240,7 @@ index 3a11ecca..e962b487 100644
  // SetEventBus - sets the event bus for publishing block related events.
  // If not called, it defaults to types.NopEventBus.
  func (blockExec *BlockExecutor) SetEventBus(eventBus types.BlockEventPublisher) {
-@@ -150,6 +161,16 @@ func (blockExec *BlockExecutor) ApplyBlock(state State, blockID types.BlockID, b
+@@ -155,6 +166,16 @@ func (blockExec *BlockExecutor) ApplyBlock(state State, blockID types.BlockID, b
  		return state, fmt.Errorf("Commit failed for application: %v", err)
  	}
  
@@ -137,7 +255,7 @@ index 3a11ecca..e962b487 100644
 +	}
 +
  	// Lock mempool, commit app state, update mempoool.
- 	appHash, err := blockExec.Commit(state, block)
+ 	appHash, err := blockExec.Commit(state, block, abciResponses.DeliverTx)
  	if err != nil {
 diff --git a/state/txindex/indexer.go b/state/txindex/indexer.go
 index ab509f96..c8aee640 100644
