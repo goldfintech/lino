@@ -138,6 +138,14 @@
   version = "v1.1.1"
 
 [[projects]]
+  digest = "1:f2ac2c724fc8214bb7b9dd6d4f5b7a983152051f5133320f228557182263cb94"
+  name = "github.com/etcd-io/bbolt"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "a0458a2b35708eef59eb5f620ceb3cd1c01a824d"
+  version = "v1.3.3"
+
+[[projects]]
   digest = "1:abeb38ade3f32a92943e5be54f55ed6d6e3b6602761d74b4aab4c9dd45c18abd"
   name = "github.com/fsnotify/fsnotify"
   packages = ["."]
@@ -497,7 +505,8 @@
   version = "v0.12.2"
 
 [[projects]]
-  digest = "1:4b0750aa7ef647aaf13de3eba5e7eab6253e3f148a776b3635a0a780177f5455"
+  branch = "yumin/exp-bolt"
+  digest = "1:f16fce3e91d84ec73425bb70ceba12712d3ea24fbfb41bed05a3f2e37e67352d"
   name = "github.com/tendermint/tendermint"
   packages = [
     "abci/client",
@@ -564,7 +573,8 @@
     "version",
   ]
   pruneopts = "UT"
-  revision = "v0.31.5"
+  revision = "3ef9273994e6956bdb5faacf97a06ba3bf96d757"
+  source = "github.com/lino-network/tendermint"
 
 [[projects]]
   digest = "1:efa896fd8b5d5ad8189127b936b735cda7c8299a8e6f9c9918abce9888afec36"
