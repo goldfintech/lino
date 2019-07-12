@@ -1,0 +1,16 @@
+diff --git a/types/utils.go b/types/utils.go
+index 09bce6b76..68ae03a23 100644
+--- a/types/utils.go
++++ b/types/utils.go
+@@ -69,10 +69,7 @@ func ParseTimeBytes(bz []byte) (time.Time, error) {
+ 
+ // NewLevelDB instantiate a new LevelDB instance according to DBBackend.
+ func NewLevelDB(name, dir string) (db dbm.DB, err error) {
+-	backend := dbm.GoLevelDBBackend
+-	if DBBackend == string(dbm.CLevelDBBackend) {
+-		backend = dbm.CLevelDBBackend
+-	}
++	var backend dbm.DBBackendType = "bolt"
+ 	defer func() {
+ 		if r := recover(); r != nil {
+ 			err = fmt.Errorf("couldn't create db: %v", r)
